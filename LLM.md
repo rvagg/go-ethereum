@@ -113,6 +113,21 @@ Each implementation has its own approach to the Ethereum JSON-RPC API, with vary
 | **Raw JSON Numbers** | Not accepted | Accepted (e.g., `42` without quotes) |
 | **Special Tags** | Handled in BlockNumber | Handled in EthBlockNumberOrHash |
 | **Range Limits** | Rejects values > int64 max | uint64 range |
+| **Inconsistent Support** | Consistent tag support across all methods | Inconsistent: Some methods use EthUint64 which doesn't support tags |
+
+### Block Tag Support in Lotus Methods
+
+Lotus has mixed support for block tags:
+
+1. **Methods with Full Block Tag Support**:
+   - `eth_getBlockByNumber` - Takes a string parameter and handles "latest", "pending", "safe", "finalized" tags
+   - `eth_getTransactionByBlockNumberAndIndex` - Takes a string parameter and handles the same tags
+   - Most other methods that take block parameters also support these tags
+
+2. **Methods Without Block Tag Support**:
+   - `eth_getBlockTransactionCountByNumber` - Uses `EthUint64`, only accepts numeric values
+   
+Many Lotus methods use the `getTipsetByBlockNumber` helper function to handle block tags, which converts string tags to appropriate Filecoin tipsets. Note that "earliest" tag is explicitly not supported and returns an error in methods that use this helper.
 
 ### Block Number or Hash Unmarshaling
 
@@ -342,12 +357,14 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 ### Across All Implementations
 
 1. **Block Tag Interpretation**: 
-   - All support "earliest", "latest", "pending", "safe", "finalized"
+   - All support "latest", "pending", "safe", "finalized"
    - Different meanings for "safe" and "finalized":
      * go-ethereum: Based on Ethereum consensus layer
      * Erigon: Based on Ethereum consensus layer
      * Lotus: "safe" = 30 epochs behind latest, "finalized" = 900 epochs behind latest
    - Erigon adds "latestExecuted" and "null" tags
+   - go-ethereum and Erigon support "earliest", but Lotus explicitly does not
+   - **Note**: Most Lotus methods support block tags, but there are exceptions like eth_getBlockTransactionCountByNumber
 
 2. **Block Number Format Requirements**: 
    - go-ethereum: Strict hex with "0x" prefix, rejects leading zeros
