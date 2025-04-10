@@ -6,3 +6,9 @@
 	path = tests/evm-benchmarks
 	url = https://github.com/ipsilon/evm-benchmarks
 	shallow = true
+[submodule "lotus"]
+	path = lotus
+	url = https://github.com/filecoin-project/lotus.git
+[submodule "erigon"]
+	path = erigon
+	url = https://github.com/ledgerwatch/erigon.git
