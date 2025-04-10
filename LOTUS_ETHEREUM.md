@@ -21,12 +21,22 @@ This document compares the Ethereum JSON-RPC API implementations across three co
 
 ## Core Type Implementation Comparison
 
-| Type | go-ethereum | Erigon | Lotus | Key Differences |
-|------|-------------|--------|-------|-----------------|
-| **BlockNumber** | int64 with special constants:<br>- `EarliestBlockNumber` = -5<br>- `SafeBlockNumber` = -4<br>- `FinalizedBlockNumber` = -3<br>- `LatestBlockNumber` = -2<br>- `PendingBlockNumber` = -1 | int64 with different constants:<br>- `LatestExecutedBlockNumber` = -5<br>- `FinalizedBlockNumber` = -4<br>- `SafeBlockNumber` = -3<br>- `PendingBlockNumber` = -2<br>- `LatestBlockNumber` = -1<br>- `EarliestBlockNumber` = 0 | Uses string representation in `EthBlockNumberOrHash`:<br>- `"earliest"`<br>- `"latest"`<br>- `"pending"`<br>- `"safe"` (30 epochs behind)<br>- `"finalized"` (900 epochs behind)<br>**Important**: Some methods use `EthUint64` which doesn't support tags | - Erigon has different constant values<br>- Erigon adds `LatestExecutedBlockNumber`<br>- Lotus uses string representation<br>- Different interpretations of "safe"/"finalized"<br>- Lotus has inconsistent block tag support |
-| **Number Format** | Hex-only, requires "0x" prefix, rejects leading zeros | Accepts both decimal and hex, tries decimal first | Accepts both decimal and hex, optional "0x" prefix for decimal | - go-ethereum is strictest<br>- Erigon and Lotus are more flexible |
-| **Hash** | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix | - Very similar implementations<br>- All require "0x" prefix |
-| **Special Tags** | "earliest", "latest", "pending", "safe", "finalized" | All go-ethereum tags plus "latestExecuted", "null" | "earliest", "latest", "pending", "safe", "finalized" | - Erigon adds additional tags<br>- Different interpretations of tags |
+### BlockNumber Type
+
+| Implementation | Description | Special Constants |
+|----------------|-------------|------------------|
+| **go-ethereum** | int64 with special constants | • `EarliestBlockNumber` = -5<br>• `SafeBlockNumber` = -4<br>• `FinalizedBlockNumber` = -3<br>• `LatestBlockNumber` = -2<br>• `PendingBlockNumber` = -1 |
+| **Erigon** | int64 with different constants | • `LatestExecutedBlockNumber` = -5<br>• `FinalizedBlockNumber` = -4<br>• `SafeBlockNumber` = -3<br>• `PendingBlockNumber` = -2<br>• `LatestBlockNumber` = -1<br>• `EarliestBlockNumber` = 0 |
+| **Lotus** | Uses string representation in `EthBlockNumberOrHash` | • `"earliest"`<br>• `"latest"`<br>• `"pending"`<br>• `"safe"` (30 epochs behind)<br>• `"finalized"` (900 epochs behind)<br>**Important**: Some methods use `EthUint64` which doesn't support tags |
+
+### Key Differences in Block Number Handling
+
+| Feature | go-ethereum | Erigon | Lotus |
+|---------|-------------|--------|-------|
+| **Number Format** | Hex-only, requires "0x" prefix, rejects leading zeros | Accepts both decimal and hex, tries decimal first | Accepts both decimal and hex, optional "0x" prefix for decimal |
+| **Hash Format** | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix |
+| **Special Tags** | "earliest", "latest", "pending", "safe", "finalized" | All go-ethereum tags plus "latestExecuted", "null" | "earliest", "latest", "pending", "safe", "finalized" |
+| **Implementation** | Consistent across methods | Consistent across methods | Inconsistent - some methods don't support tags |
 
 ## JSON-RPC Method Comparison
 
@@ -174,42 +184,88 @@ The following table compares how key methods handle their parameters across all 
 
 ## Parameter Handling Differences
 
-The table below details differences in how Lotus and go-ethereum handle incoming JSON-RPC request parameters and types:
+This section details key differences in how parameters are handled between implementations.
+
+### Block Tag Support
+
+| Implementation | Supported Tags | Tag Representation | Consistency | Special Notes |
+|----------------|----------------|-------------------|-------------|---------------|
+| **go-ethereum** | "earliest", "latest", "pending", "safe", "finalized" | Negative integers | Consistent across all methods | Based on Ethereum consensus layer |
+| **Lotus** | "latest", "pending", "safe", "finalized" (rarely "earliest") | String values | Inconsistent - varies by method | • "safe" = 30 epochs behind latest<br>• "finalized" = 900 epochs behind latest<br>• eth_getBlockTransactionCountByNumber doesn't support tags |
+
+### Number and Hash Formats
 
 | Parameter Type | go-ethereum | Lotus | Potential Issues |
 |----------------|-------------|-------|------------------|
-| **Block Number Tags** | Supports "earliest", "latest", "pending", "safe", "finalized" in all methods using rpc.BlockNumber type | Inconsistent tag support:<br>- Most methods support tags via string parameters<br>- Some methods use EthUint64 which only accepts numbers<br>- Different interpretations for "safe" and "finalized" | "safe" in Lotus means 30 epochs behind latest, "finalized" is 900 epochs behind latest (Filecoin's finality)<br>Methods using EthUint64 (like eth_getBlockTransactionCountByNumber) will fail with string tags |
-| **Hex Values** | Processes values with "0x" prefix, strict validation | Similar processing with "0x" prefix | Lotus might have more lenient validation in some cases |
-| **Block Hash Format** | 32-byte hash with "0x" prefix, strict validation | 32-byte hash with "0x" prefix | Validation logic may differ slightly |
-| **Transaction Arguments** | Full support for all transaction types (legacy, EIP-1559, EIP-2930, EIP-4844) | Limited support, primarily for EIP-1559 | Applications using newer transaction types may fail |
-| **Access Lists** | Full support in transactions | Not supported | EIP-2930 access list transactions will fail |
-| **Blob Transactions** | Full support for EIP-4844 | Not supported | Blob transactions will fail |
-| **Address Format** | Native Ethereum addresses | Translates between Filecoin and Ethereum address formats | Subtle issues with certain address types, especially with deleted actors |
-| **Gas Parameters** | Native Ethereum gas model | Maps Filecoin gas to Ethereum model | May calculate gas differently, affecting estimations |
-| **Log Filtering** | Optimized for Ethereum logs | Simulated from Filecoin events | Complex topic filtering may behave differently |
+| **Block Numbers** | Hex-only with "0x" prefix, no leading zeros | Accepts both decimal and hex, leading zeros OK | Formats accepted by Lotus may fail in go-ethereum |
+| **Hash Values** | 32-byte hash with "0x" prefix | Same requirement | Minor validation differences |
+| **Address Format** | Native Ethereum addresses | Translated between Filecoin and Ethereum | Issues with certain address types |
+
+### Transaction Support
+
+| Feature | go-ethereum | Lotus | Compatibility Impact |
+|---------|-------------|-------|---------------------|
+| **Transaction Types** | Full support (legacy, EIP-1559, EIP-2930, EIP-4844) | Limited (primarily EIP-1559) | Newer transaction types will fail |
+| **Access Lists** | Fully supported | Not supported | EIP-2930 transactions will fail |
+| **Blob Transactions** | Fully supported | Not supported | EIP-4844 transactions will fail |
+| **Gas Model** | Native Ethereum model | Mapped from Filecoin gas | Different estimation results |
+| **Log Filtering** | Native implementation | Simulated from Filecoin events | Different behavior for complex filters |
 
 ## Block Specifier Handling by Method
 
-The table below details exactly how block specifiers are handled in each relevant API method, comparing Lotus and go-ethereum implementations:
+This section details how block specifiers are handled in key API methods across implementations.
 
-| Method | Parameter in go-ethereum | Parameter in Lotus | Differences and Compatibility Issues |
-|--------|--------------------------|-------------------|-------------------------------------|
-| **eth_getBlockByNumber** | `BlockNumber` type with:<br>- Special tags: "earliest", "latest", "pending", "safe", "finalized"<br>- Numeric values **require** "0x" prefix (hex only)<br>- Rejects leading zeros (e.g., "0x01") | `string` parameter with:<br>- Special tags: "latest", "pending", "safe", "finalized" (NOT "earliest")<br>- Uses getTipsetByBlockNumber helper<br>- Numeric values accept both decimal and hex<br>- Accepts leading zeros | - "earliest" tag explicitly not supported in Lotus<br>- Different interpretation of "safe" and "finalized"<br>- Lotus accepts decimal formats (go-ethereum rejects)<br>- go-ethereum rejects leading zeros (Lotus accepts)<br>- Lotus converts between Filecoin tipsets and Ethereum blocks |
-| **eth_getBlockTransactionCountByNumber** | `BlockNumber` type with:<br>- Special tags support<br>- Same validation as above | `EthUint64` with:<br>- **NO special tag support**<br>- Only numeric values accepted | - Lotus does not support block tags for this method<br>- Will fail if "latest", "pending", etc. are used<br>- Common cause of compatibility issues |
-| **eth_getTransactionByBlockNumberAndIndex** | `BlockNumber` type with:<br>- Special tags support<br>- Same validation as above | `string` parameter with:<br>- Full block tag support<br>- Uses getTipsetByBlockNumber helper<br>- Supports "latest", "pending", "safe", "finalized" | - Lotus's implementation does properly handle tags<br>- "earliest" tag is not supported and returns an error<br>- Different interpretation of "safe" and "finalized" |
-| **eth_getBlockByHash** | `Hash` type (32 bytes):<br>- Must be 66 chars (including 0x)<br>- Explicitly requires "0x" prefix | `EthHash` type (32 bytes):<br>- Must be 66 chars (including 0x)<br>- Explicitly requires "0x" prefix | - Both implementations require "0x" prefix for hashes<br>- Lotus performs extra conversion between Ethereum hashes and Filecoin CIDs<br>- Similar validation, both reject hashes without "0x" prefix |
-| **eth_call** | `BlockNumberOrHash` with:<br>- Block number (hex only with "0x" prefix)<br>- Block hash (requires "0x" prefix)<br>- Special tags<br>- Optional "requireCanonical" parameter | `EthBlockNumberOrHash` with:<br>- Block number (hex or decimal)<br>- Block hash (requires "0x" prefix)<br>- Special tags<br>- Similar "requireCanonical" parameter | - More flexible numeric formats in Lotus<br>- Both require "0x" prefix for hashes<br>- "safe" and "finalized" have different meanings<br>- Internal representation differences |
-| **eth_estimateGas** | Optional `BlockNumberOrHash`<br>- Default to "latest"<br>- Same parsing as eth_call | Optional `EthBlockNumberOrHash`<br>- Similar default<br>- Same parsing as eth_call | - Same format differences as eth_call<br>- Different gas model affects estimation results |
-| **eth_getBalance** | `BlockNumberOrHash`<br>- Same parsing as eth_call | `EthBlockNumberOrHash`<br>- Same parsing as eth_call | - Same format differences as eth_call<br>- Address translation between Filecoin and Ethereum formats |
-| **eth_getStorageAt** | `BlockNumberOrHash`<br>- Same parsing as eth_call | `EthBlockNumberOrHash`<br>- Same parsing as eth_call | - Same format differences as eth_call<br>- Different storage model between Filecoin and Ethereum |
-| **eth_getCode** | `BlockNumberOrHash`<br>- Same parsing as eth_call | `EthBlockNumberOrHash`<br>- Same parsing as eth_call | - Same format differences as eth_call<br>- Different code retrieval mechanism |
-| **eth_getLogs** | `FilterCriteria` with:<br>- FromBlock/ToBlock accept special tags ("latest", "pending", "earliest", "safe", "finalized")<br>- BlockHash requires "0x" prefix<br>- Block numbers must use "0x" prefix<br>- BlockHash mutually exclusive with FromBlock/ToBlock | `EthFilterSpec` with:<br>- FromBlock/ToBlock accept special tags ("latest", "pending", "earliest", "safe", "finalized")<br>- Technically requires "0x" prefix for numeric block numbers<br>- BlockHash requires "0x" prefix<br>- BlockHash mutually exclusive with FromBlock/ToBlock<br>- Enforces max range limit between FromBlock and ToBlock | - Both implementations support all five block tags<br>- Both require "0x" prefix for hashes<br>- "safe" in Lotus = 30 epochs behind latest<br>- "finalized" in Lotus = 900 epochs behind latest<br>- Lotus adds maximum range limitation<br>- Internal representation differences |
-| **eth_getTransactionCount** | `BlockNumberOrHash`<br>- Same parsing as eth_call | `EthBlockNumberOrHash`<br>- Same parsing as eth_call | - Same format differences as eth_call<br>- Different nonce tracking between Filecoin and Ethereum |
-| **eth_getBlockTransactionCountByNumber** | `BlockNumber`<br>- Requires "0x" prefix for numbers<br>- Rejects leading zeros | `EthUint64`<br>- Accepts decimal or hex<br>- Accepts leading zeros | - Lotus accepts more block number formats<br>- Different mechanism for counting transactions (messages in Filecoin) |
-| **eth_getBlockTransactionCountByHash** | `Hash`<br>- Explicitly requires "0x" prefix | `EthHash`<br>- Explicitly requires "0x" prefix | - Both implementations require "0x" prefix<br>- Similar hash validation requirements |
-| **eth_getTransactionByHash** | No block parameter | No block parameter | - N/A for block specifiers, but transaction format differences exist |
-| **eth_feeHistory** | Takes:<br>- Block count<br>- Newest block (with "0x" required)<br>- Reward percentiles | Similar parameters with:<br>- More flexible block number format | - Lotus accepts more block number formats<br>- Fee calculation differences due to different gas models |
-| **trace_block** | N/A (debug namespace in go-ethereum) | `EthBlockNumberOrHash` with same parsing as eth_call | - Different namespaces (trace_ vs debug_)<br>- Maps to Filecoin.EthTraceBlock internally<br>- Different tracing implementations |
+### eth_getBlockByNumber
+
+| Feature | go-ethereum | Lotus |
+|---------|-------------|-------|
+| **Parameter Type** | `BlockNumber` type | `string` parameter |
+| **Block Tags** | "earliest", "latest", "pending", "safe", "finalized" | "latest", "pending", "safe", "finalized" (NOT "earliest") |
+| **Number Format** | • Hex only with "0x" prefix<br>• Rejects leading zeros | • Both decimal and hex accepted<br>• Accepts leading zeros |
+| **Implementation** | Native Ethereum block structure | Converts Filecoin tipsets to Ethereum blocks |
+| **Key Issues** | Stricter validation | • "earliest" tag explicitly not supported<br>• Different meaning for "safe"/"finalized" |
+### eth_getBlockTransactionCountByNumber
+
+| Feature | go-ethereum | Lotus |
+|---------|-------------|-------|
+| **Parameter Type** | `BlockNumber` type | `EthUint64` |
+| **Block Tags** | Full support for all tags | **NO support for block tags** |
+| **Key Issues** | Consistent with other methods | • Will fail with "latest", "pending", etc.<br>• Only accepts numeric values<br>• Major compatibility issue |
+### eth_getTransactionByBlockNumberAndIndex
+
+| Feature | go-ethereum | Lotus |
+|---------|-------------|-------|
+| **Parameter Type** | `BlockNumber` type | `string` parameter |
+| **Block Tags** | Full support for all tags | "latest", "pending", "safe", "finalized" |
+| **Implementation** | Standard behavior | Uses getTipsetByBlockNumber helper |
+| **Key Issues** | Consistent behavior | • "earliest" tag not supported<br>• Different meaning for "safe"/"finalized" |
+### eth_getBlockByHash
+
+| Feature | go-ethereum | Lotus |
+|---------|-------------|-------|
+| **Parameter Type** | `Hash` type (32 bytes) | `EthHash` type (32 bytes) |
+| **Format** | Must be 66 chars (with 0x prefix) | Same requirement |
+| **Validation** | Explicitly requires "0x" prefix | Same requirement |
+| **Key Differences** | Native hash handling | • Converts between Ethereum hashes and Filecoin CIDs<br>• Similar validation rules |
+### eth_getLogs
+
+| Feature | go-ethereum | Lotus |
+|---------|-------------|-------|
+| **Parameter** | FilterCriteria with FromBlock/ToBlock | Similar interface translated to Filecoin |
+| **Block Tags** | All block tags supported | Only "latest" and "earliest" supported |
+| **Block Hash** | Mutually exclusive with from/to | Same constraint |
+| **Number Format** | Block numbers require "0x" prefix | Block numbers must be hex with "0x" prefix |
+| **Key Issues** | Standard implementation | • No support for "pending", "safe", "finalized"<br>• Maximum range limitation<br>• Different topic handling |
+### Other Methods
+
+| Method | go-ethereum Parameter | Lotus Parameter | Key Differences |
+|--------|------------------------|----------------|-----------------|
+| **eth_call** | BlockNumberOrHash | EthBlockNumberOrHash | • Lotus accepts more numeric formats<br>• Different tag interpretations |
+| **eth_getBalance** | BlockNumberOrHash | EthBlockNumberOrHash | • Address translation in Lotus<br>• Same tag differences |
+| **eth_getCode** | BlockNumberOrHash | EthBlockNumberOrHash | • Different code retrieval mechanism |
+| **eth_getTransactionCount** | BlockNumberOrHash | EthBlockNumberOrHash | • Different nonce tracking in Filecoin |
+| **eth_feeHistory** | Newest block with "0x" required | More flexible block number format | • Lotus accepts decimal formats<br>• Different fee calculations |
+| **trace_block** | N/A (debug_ namespace) | EthBlockNumberOrHash | • Different namespace organization<br>• Different tracing implementation |
 
 ## Detailed Block Parameter Unmarshaling Comparison
 

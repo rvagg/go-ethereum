@@ -1,43 +1,182 @@
-# Comprehensive Ethereum API Compatibility Analysis
+# LLM Analysis Context - Ethereum API Compatibility
 
-This document captures the complete current state of analysis on the compatibility between Lotus's Ethereum API implementation, go-ethereum's native API implementation, and Erigon's implementation. Use this as context for future conversations to continue our detailed comparison.
+This document contains context for LLM assistants to help analyze compatibility issues between Ethereum JSON-RPC API implementations. It represents the current state of analysis as of April 2025 on compatibility between Lotus's Ethereum API implementation, go-ethereum's native API implementation, and Erigon's implementation.
 
-## Introduction
+## Project Overview
 
 This analysis compares three Ethereum-compatible JSON-RPC API implementations:
-
 1. **go-ethereum**: The reference Ethereum client implementation
-2. **Lotus**: Filecoin's Ethereum compatibility layer that allows Ethereum tools to interact with the Filecoin blockchain
-3. **Erigon**: An alternative Ethereum client implementation with performance optimizations and extensions
+2. **Lotus**: Filecoin's Ethereum compatibility layer 
+3. **Erigon**: An alternative Ethereum client with optimizations
 
-Each implementation has its own approach to the Ethereum JSON-RPC API, with varying levels of compatibility, parameter handling, and extension methods. This document details the similarities and differences across these implementations to help understand potential compatibility challenges.
+The main documentation is in `LOTUS_ETHEREUM.md`, which has been formatted to be compatible with Notion and contains tables comparing method availability, parameter handling, and potential compatibility issues.
 
-## Repository Context
+## Key Findings
 
-* `/home/rvagg/go/src/github.com/ethereum/go-ethereum/` - The go-ethereum repository
-* `./lotus/` - A symlink to the Filecoin Lotus repository
-* `./erigon/` - A clone of the Erigon repository
+1. **Block Tag Handling Inconsistencies**: 
+   - Lotus has inconsistent block tag support across methods:
+     - Most methods like `eth_getBlockByNumber` support tags via `getTipsetByBlockNumber`
+     - `eth_getBlockTransactionCountByNumber` uses `EthUint64` and doesn't support tags
+     - `eth_getLogs` supports only "latest" and "earliest" (not "pending", "safe", "finalized")
+   - Erigon adds additional tags like "latestExecuted"
+   - Tag meanings differ - "safe" and "finalized" in Lotus are fixed offsets from latest
 
-### Key Files
+2. **Method Availability Gaps**:
+   - Lotus doesn't support newer Ethereum features:
+     - No EIP-2930 access list support
+     - No EIP-4844 blob transaction support
+     - No support for uncle-related methods (not applicable to Filecoin)
+   - Lotus adds Filecoin-specific methods for CID lookups
+   - Erigon adds optimized APIs like bitmap-based log filtering
 
-#### go-ethereum
-* `./internal/ethapi/api.go` - Core Ethereum API implementations
-* `./rpc/types.go` - Types like BlockNumber and BlockNumberOrHash
+3. **Parameter Handling Differences**:
+   - go-ethereum is strictest (hex only with "0x", no leading zeros)
+   - Lotus is most flexible (decimal or hex, accepts leading zeros)
+   - Erigon tries decimal first, then hex
+
+4. **Transaction Types**:
+   - go-ethereum supports all transaction types
+   - Lotus mainly supports EIP-1559 (dynamic fee) transactions
+   - Applications using newer transaction types may fail on Lotus
+
+## Recent Discoveries
+
+Recent investigation revealed that:
+1. Lotus does implement `eth_getTransactionByBlockHashAndIndex` and `eth_getTransactionByBlockNumberAndIndex` (previously marked as missing)
+2. Lotus has very limited block tag support in `eth_getLogs` - only "latest" and "earliest" are supported based on analysis of the `parseBlockRange` function in `node/impl/eth/events.go`
+3. The `getTipsetByBlockNumber` helper in `node/impl/eth/utils.go` explicitly does not support the "earliest" tag and returns an error
+
+## Key Code References
+
+### Lotus Block Tag Handling
+```go
+// In Lotus: node/impl/eth/utils.go
+func getTipsetByBlockNumber(ctx context.Context, cs ChainStore, blkParam string, strict bool) (*types.TipSet, error) {
+    if blkParam == "earliest" {
+        return nil, xerrors.New("block param \"earliest\" is not supported")
+    }
+
+    head := cs.GetHeaviestTipSet()
+    switch blkParam {
+    case "pending":
+        return head, nil
+    case "latest":
+        parent, err := cs.GetTipSetFromKey(ctx, head.Parents())
+        if err != nil {
+            return nil, xerrors.New("cannot get parent tipset")
+        }
+        return parent, nil
+    case "safe":
+        latestHeight := head.Height() - 1
+        safeHeight := latestHeight - ethtypes.SafeEpochDelay
+        ts, err := cs.GetTipsetByHeight(ctx, safeHeight, head, true)
+        /* ... */
+    case "finalized":
+        latestHeight := head.Height() - 1
+        safeHeight := latestHeight - policy.ChainFinality
+        /* ... */
+    default:
+        var num ethtypes.EthUint64
+        err := num.UnmarshalJSON([]byte(`"` + blkParam + `"`))
+        /* ... */
+    }
+}
+```
+
+### Lotus eth_getLogs Implementation
+```go
+// In Lotus: node/impl/eth/events.go
+func parseBlockRange(heaviest abi.ChainEpoch, fromBlock, toBlock *string, maxRange abi.ChainEpoch) (minHeight abi.ChainEpoch, maxHeight abi.ChainEpoch, err error) {
+    if fromBlock == nil || *fromBlock == "latest" || len(*fromBlock) == 0 {
+        minHeight = heaviest
+    } else if *fromBlock == "earliest" {
+        minHeight = 0
+    } else {
+        if !strings.HasPrefix(*fromBlock, "0x") {
+            return 0, 0, xerrors.New("FromBlock is not a hex")
+        }
+        epoch, err := ethtypes.EthUint64FromHex(*fromBlock)
+        /* ... */
+    }
+
+    if toBlock == nil || *toBlock == "latest" || len(*toBlock) == 0 {
+        // here latest means the latest at the time
+        maxHeight = -1
+    } else if *toBlock == "earliest" {
+        maxHeight = 0
+    } else {
+        if !strings.HasPrefix(*toBlock, "0x") {
+            return 0, 0, xerrors.New("ToBlock is not a hex")
+        }
+        /* ... */
+    }
+    // No support for "pending", "safe", "finalized" in this method
+    /* ... */
+}
+```
+
+### go-ethereum Block Number Handling
+```go
+// In go-ethereum: rpc/types.go
+func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
+    input := strings.TrimSpace(string(data))
+    if len(input) >= 2 && input[0] == '"' && input[len(input)-1] == '"' {
+        input = input[1 : len(input)-1]
+    }
+
+    switch input {
+    case "earliest":
+        *bn = EarliestBlockNumber
+        return nil
+    case "latest":
+        *bn = LatestBlockNumber
+        return nil
+    case "pending":
+        *bn = PendingBlockNumber
+        return nil
+    case "finalized":
+        *bn = FinalizedBlockNumber
+        return nil
+    case "safe":
+        *bn = SafeBlockNumber
+        return nil
+    }
+
+    // Try to parse as a hex number
+    if !strings.HasPrefix(input, "0x") {
+        return errors.New("hex number without 0x prefix")
+    }
+    input = input[2:]
+    if len(input) > 0 && input[0] == '0' {
+        return errors.New("hex number with leading zero digits")
+    }
+    /* ... */
+}
+```
+
+## Repository Structure
+
+Key files and locations for analysis:
+
+### go-ethereum
+* `./internal/ethapi/api.go` - Core API implementations
+* `./rpc/types.go` - JSON-RPC types like BlockNumber
 * `./common/types.go` - Core types like Hash
-* `./common/hexutil/hexutil.go` - Hex value parsing
 * `./eth/filters/api.go` - Filter API implementation
 
-#### Lotus
+### Lotus
 * `./lotus/node/impl/full/eth.go` - Ethereum API implementations
+* `./lotus/node/impl/eth/*.go` - Implementation files for specific APIs
 * `./lotus/chain/types/ethtypes/eth_types.go` - Ethereum compatibility types
-* `./lotus/api/eth_aliases.go` - Maps Lotus's Ethereum-compatible methods to JSONRPC method names
+* `./lotus/api/eth_aliases.go` - Maps Lotus methods to JSON-RPC names
 
-#### Erigon
-* `./erigon/turbo/jsonrpc/eth_*.go` - Ethereum API implementation files
-* `./erigon/turbo/jsonrpc/trace_*.go` - Trace API implementation files
+### Erigon
+* `./erigon/turbo/jsonrpc/eth_*.go` - Ethereum API implementations
+* `./erigon/turbo/jsonrpc/trace_*.go` - Trace API implementations
 * `./erigon/rpc/types.go` - JSON-RPC types
 * `./erigon/erigon-lib/common/hash.go` - Core types like Hash
-* `./erigon/turbo/jsonrpc/daemon.go` - Namespace registration
+
+Each implementation has its own approach to the Ethereum JSON-RPC API, with varying levels of compatibility, parameter handling, and extension methods. This document details the similarities and differences across these implementations to help understand potential compatibility challenges.
 
 ## Fundamental Architectural Differences
 
