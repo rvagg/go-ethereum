@@ -122,9 +122,13 @@ Lotus has mixed support for block tags:
 1. **Methods with Full Block Tag Support**:
    - `eth_getBlockByNumber` - Takes a string parameter and handles "latest", "pending", "safe", "finalized" tags
    - `eth_getTransactionByBlockNumberAndIndex` - Takes a string parameter and handles the same tags
-   - Most other methods that take block parameters also support these tags
+   - Most other methods that use the `getTipsetByBlockNumber` helper support these tags
 
-2. **Methods Without Block Tag Support**:
+2. **Methods With Limited Block Tag Support**:
+   - `eth_getLogs` - Only supports "latest" and "earliest" in its FromBlock/ToBlock parameters
+   - Doesn't support "pending", "safe", or "finalized" tags in log filters
+
+3. **Methods Without Block Tag Support**:
    - `eth_getBlockTransactionCountByNumber` - Uses `EthUint64`, only accepts numeric values
    
 Many Lotus methods use the `getTipsetByBlockNumber` helper function to handle block tags, which converts string tags to appropriate Filecoin tipsets. Note that "earliest" tag is explicitly not supported and returns an error in methods that use this helper.
@@ -220,8 +224,10 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 
 * **go-ethereum**:
   - Standard FilterCriteria with topic filtering
+  - Supports all block tags ("earliest", "latest", "pending", "safe", "finalized")
+  - Converts block tags to negative integers internally
   - Block range and block hash support
-  - Standard RPC parameter validation
+  - Detailed validation logic
 
 * **Erigon**:
   - Highly optimized using bitmap operations
@@ -231,7 +237,10 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 
 * **Lotus**:
   - Similar interface but translated to Filecoin events
-  - Enforces maximum range limitation
+  - Limited block tag support - only "latest" and "earliest"
+  - Does NOT support "pending", "safe", or "finalized" in log filters
+  - Custom parseBlockRange function with different validation logic
+  - Enforces maximum range limitation 
   - Topic conversion between Ethereum and Filecoin formats
 
 ### Block Transaction Methods
