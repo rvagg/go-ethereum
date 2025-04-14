@@ -45,8 +45,66 @@ Recent investigation revealed that:
 1. Lotus does implement `eth_getTransactionByBlockHashAndIndex` and `eth_getTransactionByBlockNumberAndIndex` (previously marked as missing)
 2. Lotus has very limited block tag support in `eth_getLogs` - only "latest" and "earliest" are supported based on analysis of the `parseBlockRange` function in `node/impl/eth/events.go`
 3. The `getTipsetByBlockNumber` helper in `node/impl/eth/utils.go` explicitly does not support the "earliest" tag and returns an error
+4. Lotus has a split implementation of block tag handling:
+   - The JSON unmarshaling of `EthBlockNumberOrHash` only supports "earliest", "latest", and "pending" tags
+   - "safe" and "finalized" tags are handled at the application level in various methods
+   - This creates inconsistent behavior as some tags may work in some contexts but not others
 
 ## Key Code References
+
+### Lotus Block Tag JSON Unmarshal Implementation
+
+```go
+// In Lotus: chain/types/ethtypes/eth_types.go
+func (e *EthBlockNumberOrHash) UnmarshalJSON(data []byte) error {
+    // Try to unmarshal as EthUint64
+    var num EthUint64
+    err := num.UnmarshalJSON(data)
+    if err == nil {
+        e.BlockNumber = &num
+        return nil
+    }
+
+    // Try to unmarshal as predefined string
+    var str string
+    err = json.Unmarshal(data, &str)
+    if err == nil {
+        // Only supports these three tags at JSON level!
+        if str == "earliest" || str == "pending" || str == "latest" {
+            e.PredefinedBlock = &str
+            return nil
+        }
+
+        // check if input is a block hash (66 characters long)
+        if len(str) == 66 && strings.HasPrefix(str, "0x") {
+            hash, err := ParseEthHash(str)
+            if err != nil {
+                return err
+            }
+            e.BlockHash = &hash
+            return nil
+        }
+    }
+
+    // Try to unmarshal as a struct
+    var bnh struct {
+        BlockNumber     *EthUint64 `json:"blockNumber,omitempty"`
+        BlockHash       *EthHash   `json:"blockHash,omitempty"`
+        RequireCanonical *bool      `json:"requireCanonical,omitempty"`
+    }
+
+    err = json.Unmarshal(data, &bnh)
+    if err != nil {
+        return err
+    }
+
+    e.BlockNumber = bnh.BlockNumber
+    e.BlockHash = bnh.BlockHash
+    e.RequireCanonical = bnh.RequireCanonical
+
+    return nil
+}
+```
 
 ### Lotus Block Tag Handling
 ```go
@@ -505,14 +563,16 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 ### Across All Implementations
 
 1. **Block Tag Interpretation**: 
-   - All support "latest", "pending", "safe", "finalized"
+   - Different levels of tag support:
+     * go-ethereum: Consistent support for "earliest", "latest", "pending", "safe", "finalized" at JSON level
+     * Erigon: Adds "latestExecuted" and "null" tags
+     * Lotus: **Split implementation** - JSON unmarshal only supports "earliest", "latest", "pending", while "safe"/"finalized" are handled at application level
    - Different meanings for "safe" and "finalized":
      * go-ethereum: Based on Ethereum consensus layer
      * Erigon: Based on Ethereum consensus layer
      * Lotus: "safe" = 30 epochs behind latest, "finalized" = 900 epochs behind latest
-   - Erigon adds "latestExecuted" and "null" tags
-   - go-ethereum and Erigon support "earliest", but Lotus explicitly does not
-   - **Note**: Most Lotus methods support block tags, but there are exceptions like eth_getBlockTransactionCountByNumber
+   - **Critical note**: Some methods like `getTipsetByBlockNumber` explicitly reject "earliest" tag despite it being supported at JSON level
+   - Different methods have inconsistent tag support (e.g., eth_getBlockTransactionCountByNumber uses EthUint64 and has no tag support)
 
 2. **Block Number Format Requirements**: 
    - go-ethereum: Strict hex with "0x" prefix, rejects leading zeros
@@ -608,10 +668,12 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
    - Applications relying on post-Merge or post-Cancun fields will find them missing in Lotus
    - Tools making assumptions about nonce, difficulty, or other consensus fields will see unexpected values in Lotus
 
-4. **Parameter Format Requirements**:
+4. **Parameter Format and Block Tag Handling**:
    - Tools that submit block numbers without "0x" prefix will fail with go-ethereum but work with Erigon and Lotus
    - Applications submitting block numbers with leading zeros will fail with go-ethereum but work with the others
    - Tools relying on decimal block numbers will have issues with go-ethereum
+   - Applications using "safe" or "finalized" tags at the JSON level will fail with Lotus's EthBlockNumberOrHash.UnmarshalJSON
+   - Applications using "earliest" tag with getTipsetByBlockNumber will receive an error despite the tag being accepted at JSON level
 
 5. **Gas and Fee Calculation**:
    - Applications relying on exact gas calculation semantics will see different results across implementations

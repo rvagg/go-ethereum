@@ -35,7 +35,7 @@ This document compares the Ethereum JSON-RPC API implementations across three co
 |---------|-------------|--------|-------|
 | **Number Format** | Hex-only, requires "0x" prefix, rejects leading zeros | Accepts both decimal and hex, tries decimal first | Accepts both decimal and hex, optional "0x" prefix for decimal |
 | **Hash Format** | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix |
-| **Special Tags** | "earliest", "latest", "pending", "safe", "finalized" | All go-ethereum tags plus "latestExecuted", "null" | "earliest", "latest", "pending", "safe", "finalized" |
+| **Special Tags** | "earliest", "latest", "pending", "safe", "finalized" | All go-ethereum tags plus "latestExecuted", "null" | JSON unmarshaling only supports: "earliest", "latest", "pending"<br>Higher level code supports: "safe", "finalized" |
 | **Implementation** | Consistent across methods | Consistent across methods | Inconsistent - some methods don't support tags |
 
 ## JSON-RPC Method Comparison
@@ -188,10 +188,10 @@ This section details key differences in how parameters are handled between imple
 
 ### Block Tag Support
 
-| Implementation | Supported Tags | Tag Representation | Consistency | Special Notes |
-|----------------|----------------|-------------------|-------------|---------------|
-| **go-ethereum** | "earliest", "latest", "pending", "safe", "finalized" | Negative integers | Consistent across all methods | Based on Ethereum consensus layer |
-| **Lotus** | "latest", "pending", "safe", "finalized" (rarely "earliest") | String values | Inconsistent - varies by method | • "safe" = 30 epochs behind latest<br>• "finalized" = 900 epochs behind latest<br>• eth_getBlockTransactionCountByNumber doesn't support tags |
+| Implementation | JSON Unmarshal Support | Application Level Support | Tag Representation | Key Compatibility Issues |
+|----------------|------------------------|---------------------------|-------------------|-----------------------|
+| **go-ethereum** | "earliest", "latest", "pending", "safe", "finalized" | Same as JSON level | Negative integers | Consistent behavior across all methods |
+| **Lotus** | Only "earliest", "latest", "pending" | "latest", "pending", "safe", "finalized" (but rejects "earliest") | String values | • Split implementation causes inconsistent behavior<br>• "safe" = 30 epochs behind latest<br>• "finalized" = 900 epochs behind latest<br>• Some methods like eth_getBlockTransactionCountByNumber don't support any tags |
 
 ### Number and Hash Formats
 
@@ -289,7 +289,7 @@ This section details how block specifiers are handled in key API methods across 
 | Feature | go-ethereum (BlockNumberOrHash) | Lotus (EthBlockNumberOrHash) | Compatibility Issues |
 |---------|--------------------------------|------------------------------|----------------------|
 | **JSON Structure** | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | Both require exact field name matching (case-sensitive) |
-| **Special Tags** | Supports "earliest", "latest", "pending", "safe", "finalized" | Supports "earliest", "latest", "pending" at unmarshal level | "safe" and "finalized" not recognized at Lotus JSON unmarshaling level |
+| **Special Tags** | Supports "earliest", "latest", "pending", "safe", "finalized" | Only "earliest", "latest", "pending" at unmarshal level | "safe" and "finalized" not recognized at JSON unmarshal level but are handled by application code |
 | **Internal Representation** | Special tags become negative integers | Special tags stored as string pointers | Different internal logic required |
 | **Block Hash Detection** | 66 chars AND must have "0x" prefix | 66 chars AND must have "0x" prefix | Both implementations require "0x" prefix for hashes |
 | **Tag Case Sensitivity** | Case sensitive (must be lowercase) | Case sensitive (must be lowercase) | Both reject "Latest" or "LATEST" |
