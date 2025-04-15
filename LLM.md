@@ -14,12 +14,23 @@ The main documentation is in `LOTUS_ETHEREUM.md`, which has been formatted to be
 ## Key Findings
 
 1. **Block Tag Handling Inconsistencies**: 
-   - Lotus has inconsistent block tag support across methods:
+   - **go-ethereum** has a consistent approach:
+     - Unified implementation in `rpc/types.go`
+     - Uses negative integer constants: EarliestBlockNumber(-5), SafeBlockNumber(-4), etc.
+     - All block tags supported at JSON level
+     - Same tag handling across all methods
+   
+   - **Erigon** extends go-ethereum's approach:
+     - Uses different negative integer constants than go-ethereum
+     - Adds additional tags like "latestExecuted" and "null"
+     - Similar consistency across methods
+   
+   - **Lotus** has inconsistent block tag support across methods:
      - Most methods like `eth_getBlockByNumber` support tags via `getTipsetByBlockNumber`
      - `eth_getBlockTransactionCountByNumber` uses `EthUint64` and doesn't support tags
      - `eth_getLogs` supports only "latest" and "earliest" (not "pending", "safe", "finalized")
-   - Erigon adds additional tags like "latestExecuted"
-   - Tag meanings differ - "safe" and "finalized" in Lotus are fixed offsets from latest
+     - Inconsistent implementation with split behavior between JSON unmarshal and application level
+     - Tag meanings differ - "safe" and "finalized" in Lotus are fixed offsets from latest (30 and 900 epochs)
 
 2. **Method Availability Gaps**:
    - Lotus doesn't support newer Ethereum features:
@@ -30,9 +41,24 @@ The main documentation is in `LOTUS_ETHEREUM.md`, which has been formatted to be
    - Erigon adds optimized APIs like bitmap-based log filtering
 
 3. **Parameter Handling Differences**:
-   - go-ethereum is strictest (hex only with "0x", no leading zeros)
-   - Lotus is most flexible (decimal or hex, accepts leading zeros)
-   - Erigon tries decimal first, then hex
+   - **go-ethereum** is strictest:
+     - Hex only with "0x" prefix
+     - Rejects leading zeros (e.g., "0x01" fails)
+     - Rejects non-string formats (raw JSON numbers)
+     - Strict validation in BlockNumber.UnmarshalJSON
+     - Careful error checking for invalid inputs
+   
+   - **Erigon** is more flexible:
+     - Accepts both decimal and hex format
+     - Tries decimal first, then hex
+     - More forgiving of formatting variations
+     - Uses different constant values for special blocks
+   
+   - **Lotus** is most flexible:
+     - Accepts decimal or hex, with or without "0x" prefix
+     - Accepts leading zeros
+     - Accepts raw JSON numbers
+     - Inconsistent handling across different methods
 
 4. **Transaction Types**:
    - go-ethereum supports all transaction types
@@ -173,9 +199,27 @@ func parseBlockRange(heaviest abi.ChainEpoch, fromBlock, toBlock *string, maxRan
 }
 ```
 
-### go-ethereum Block Number Handling
+### go-ethereum Block Number and Hash Handling
+
+#### BlockNumber in go-ethereum
 ```go
 // In go-ethereum: rpc/types.go
+type BlockNumber int64
+
+const (
+    EarliestBlockNumber  = BlockNumber(-5)
+    SafeBlockNumber      = BlockNumber(-4)
+    FinalizedBlockNumber = BlockNumber(-3)
+    LatestBlockNumber    = BlockNumber(-2)
+    PendingBlockNumber   = BlockNumber(-1)
+)
+
+// UnmarshalJSON parses the given JSON fragment into a BlockNumber. It supports:
+// - "safe", "finalized", "latest", "earliest" or "pending" as string arguments
+// - the block number
+// Returned errors:
+// - an invalid block number error when the given argument isn't a known strings
+// - an out of range error when the given block number is either too little or too large
 func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
     input := strings.TrimSpace(string(data))
     if len(input) >= 2 && input[0] == '"' && input[len(input)-1] == '"' {
@@ -200,15 +244,107 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
         return nil
     }
 
-    // Try to parse as a hex number
-    if !strings.HasPrefix(input, "0x") {
-        return errors.New("hex number without 0x prefix")
+    blckNum, err := hexutil.DecodeUint64(input)
+    if err != nil {
+        return err
     }
-    input = input[2:]
-    if len(input) > 0 && input[0] == '0' {
-        return errors.New("hex number with leading zero digits")
+    if blckNum > math.MaxInt64 {
+        return errors.New("block number larger than int64")
     }
-    /* ... */
+    *bn = BlockNumber(blckNum)
+    return nil
+}
+```
+
+#### BlockNumberOrHash in go-ethereum
+```go
+// In go-ethereum: rpc/types.go
+type BlockNumberOrHash struct {
+    BlockNumber      *BlockNumber `json:"blockNumber,omitempty"`
+    BlockHash        *common.Hash `json:"blockHash,omitempty"`
+    RequireCanonical bool         `json:"requireCanonical,omitempty"`
+}
+
+func (bnh *BlockNumberOrHash) UnmarshalJSON(data []byte) error {
+    type erased BlockNumberOrHash
+    e := erased{}
+    err := json.Unmarshal(data, &e)
+    if err == nil {
+        if e.BlockNumber != nil && e.BlockHash != nil {
+            return errors.New("cannot specify both BlockHash and BlockNumber, choose one or the other")
+        }
+        bnh.BlockNumber = e.BlockNumber
+        bnh.BlockHash = e.BlockHash
+        bnh.RequireCanonical = e.RequireCanonical
+        return nil
+    }
+    var input string
+    err = json.Unmarshal(data, &input)
+    if err != nil {
+        return err
+    }
+    switch input {
+    case "earliest":
+        bn := EarliestBlockNumber
+        bnh.BlockNumber = &bn
+        return nil
+    case "latest":
+        bn := LatestBlockNumber
+        bnh.BlockNumber = &bn
+        return nil
+    case "pending":
+        bn := PendingBlockNumber
+        bnh.BlockNumber = &bn
+        return nil
+    case "finalized":
+        bn := FinalizedBlockNumber
+        bnh.BlockNumber = &bn
+        return nil
+    case "safe":
+        bn := SafeBlockNumber
+        bnh.BlockNumber = &bn
+        return nil
+    default:
+        if len(input) == 66 {
+            hash := common.Hash{}
+            err := hash.UnmarshalText([]byte(input))
+            if err != nil {
+                return err
+            }
+            bnh.BlockHash = &hash
+            return nil
+        } else {
+            blckNum, err := hexutil.DecodeUint64(input)
+            if err != nil {
+                return err
+            }
+            if blckNum > math.MaxInt64 {
+                return errors.New("blocknumber too high")
+            }
+            bn := BlockNumber(blckNum)
+            bnh.BlockNumber = &bn
+            return nil
+        }
+    }
+}
+```
+
+#### Usage of BlockNumberOrHash in go-ethereum's Client
+```go
+// In go-ethereum: ethclient/ethclient.go
+func toBlockNumArg(number *big.Int) string {
+    if number == nil {
+        return "latest"
+    }
+    if number.Sign() >= 0 {
+        return hexutil.EncodeBig(number)
+    }
+    // It's negative.
+    if number.IsInt64() {
+        return rpc.BlockNumber(number.Int64()).String()
+    }
+    // It's negative and large, which is invalid.
+    return fmt.Sprintf("<invalid %d>", number)
 }
 ```
 
@@ -656,7 +792,10 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 
 1. **Block Tag Semantic Differences**:
    - Tools relying on the canonical meanings of "safe" and "finalized" post-Merge will behave differently with Lotus
+     - In go-ethereum: Based on consensus layer's safe/finalized heads
+     - In Lotus: Fixed offsets from latest (30 and 900 epochs)
    - Applications using Erigon's "latestExecuted" tag will fail on go-ethereum or Lotus
+   - Applications expecting consistent block tag support across methods will experience issues with Lotus
 
 2. **Transaction Type Compatibility**:
    - Applications using EIP-2930 access list transactions will fail on Lotus
@@ -670,10 +809,20 @@ Lotus implements Ethereum-compatible methods but uses specific mapping rules:
 
 4. **Parameter Format and Block Tag Handling**:
    - Tools that submit block numbers without "0x" prefix will fail with go-ethereum but work with Erigon and Lotus
+     - go-ethereum: `"42"` → Error "hex number without 0x prefix"
+     - Erigon/Lotus: `"42"` → Parsed as decimal 42
    - Applications submitting block numbers with leading zeros will fail with go-ethereum but work with the others
-   - Tools relying on decimal block numbers will have issues with go-ethereum
+     - go-ethereum: `"0x01"` → Error "hex number with leading zero digits"
+     - Erigon/Lotus: `"0x01"` → Parsed as 1
+   - Tools using raw JSON numbers will fail with go-ethereum but work with the others
+     - go-ethereum: `42` → Error, expects string format
+     - Erigon/Lotus: `42` → Accepted as block 42
    - Applications using "safe" or "finalized" tags at the JSON level will fail with Lotus's EthBlockNumberOrHash.UnmarshalJSON
+     - go-ethereum: `"safe"` → Becomes BlockNumber(-4)
+     - Lotus: `"safe"` → Error at JSON level, but works at application level in some methods
    - Applications using "earliest" tag with getTipsetByBlockNumber will receive an error despite the tag being accepted at JSON level
+     - go-ethereum: `"earliest"` → Becomes BlockNumber(-5)
+     - Lotus: `"earliest"` → Accepted at JSON level but explicitly rejected in getTipsetByBlockNumber
 
 5. **Gas and Fee Calculation**:
    - Applications relying on exact gas calculation semantics will see different results across implementations

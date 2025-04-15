@@ -157,7 +157,61 @@ The tables below compare the Ethereum JSON-RPC methods implemented across the th
 | erigon_getBalanceChangesInBlock | ❌ | ❌ | ✅ | Erigon extension |
 | erigon_getLogsByHash | ❌ | ❌ | ✅ | Erigon extension |
 
-## Method Parameter Handling Comparison
+## Method Parameter Type Reference
+
+This section maps common JSON-RPC methods to their parameter types and handling details to help understand compatibility issues.
+
+### Block Number and Hash Parameter Methods
+
+| Method | Parameter Type | go-ethereum | Erigon | Lotus |
+|--------|---------------|-------------|--------|-------|
+| **eth_getBlockByNumber** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Adds extra tags | `string`<br>Parsed by getTipsetByBlockNumber<br>Doesn't support "earliest" |
+| **eth_getBlockTransactionCountByNumber** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | `EthUint64`<br>**No tag support** - only accepts numbers |
+| **eth_getTransactionByBlockNumberAndIndex** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | `string`<br>Parsed by getTipsetByBlockNumber<br>Doesn't support "earliest" |
+| **eth_getUncleCountByBlockNumber** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | Not implemented |
+| **eth_getBlockByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix |
+| **eth_getBlockTransactionCountByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
+| **eth_getTransactionByBlockHashAndIndex** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
+| **eth_getUncleCountByBlockHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | Not implemented |
+
+### Block Number or Hash Parameter Methods
+
+| Method | Parameter Type | go-ethereum | Erigon | Lotus |
+|--------|---------------|-------------|--------|-------|
+| **eth_call** | Block Number or Hash | `BlockNumberOrHash`<br>Supports all tags and hash | `BlockNumberOrHash`<br>Adds extra tags | `EthBlockNumberOrHash`<br>JSON level: only "earliest", "latest", "pending"<br>App level: no "earliest" |
+| **eth_getBalance** | Block Number or Hash | `BlockNumberOrHash`<br>Supports all tags and hash | `BlockNumberOrHash`<br>Adds extra tags | `EthBlockNumberOrHash`<br>Same split implementation |
+| **eth_getCode** | Block Number or Hash | `BlockNumberOrHash`<br>Supports all tags and hash | `BlockNumberOrHash`<br>Adds extra tags | `EthBlockNumberOrHash`<br>Same split implementation |
+| **eth_getStorageAt** | Block Number or Hash | `BlockNumberOrHash`<br>Supports all tags and hash | `BlockNumberOrHash`<br>Adds extra tags | `EthBlockNumberOrHash`<br>Same split implementation |
+| **eth_getTransactionCount** | Block Number or Hash | `BlockNumberOrHash`<br>Supports all tags and hash | `BlockNumberOrHash`<br>Adds extra tags | `EthBlockNumberOrHash`<br>Same split implementation |
+
+### Filter Methods
+
+| Method | Parameter Type | go-ethereum | Erigon | Lotus |
+|--------|---------------|-------------|--------|-------|
+| **eth_getLogs** | Filter Criteria | `FilterCriteria`<br>FromBlock/ToBlock fields<br>Supports all tags | `FilterCriteria`<br>Optimized implementation | Custom<br>Only supports "latest" and "earliest" tags<br>Has range limitation |
+| **eth_newFilter** | Filter Criteria | `FilterCriteria`<br>Supports all tags | `FilterCriteria`<br>Supports all tags | Custom<br>Limited block tag support<br>Enforces range limit |
+
+### Transaction Methods
+
+| Method | Parameter Type | go-ethereum | Erigon | Lotus |
+|--------|---------------|-------------|--------|-------|
+| **eth_estimateGas** | Call Object + Block | `CallArgs` + `BlockNumber`<br>Supports all tags | Similar to go-ethereum | Similar but with Filecoin gas model |
+| **eth_sendRawTransaction** | Raw Transaction Hex | Hex string<br>Supports all tx types | Hex string<br>Similar to go-ethereum | Hex string<br>Limited transaction type support |
+| **eth_feeHistory** | BlockCount, BlockNumber, Percentiles | `uint64`, `BlockNumber`, `[]float64`<br>Supports all tags | Similar to go-ethereum | Similar but maps to Filecoin fee model |
+
+### Tracing Methods
+
+| Method | Tag | go-ethereum | Erigon | Lotus |
+|--------|-----|-------------|--------|-------|
+| **trace_block** | Block Number | N/A (debug_ namespace) | `BlockNumber`<br>Supports all tags | `EthBlockNumberOrHash`<br>With same split implementation |
+| **trace_filter** | Filter Criteria | N/A (debug_ namespace) | Custom filter object | Custom filter with limited tag support |
+| **trace_transaction** | Transaction Hash | N/A (debug_ namespace) | `common.Hash` | `EthHash`<br>No tag support |
+
+## Detailed Parameter Type Handling
+
+This section explains how each parameter type is handled across implementations, including validation rules and supported formats.
+
+### Method Parameter Handling Comparison
 
 The following table compares how key methods handle their parameters across all three implementations:
 
@@ -190,7 +244,8 @@ This section details key differences in how parameters are handled between imple
 
 | Implementation | JSON Unmarshal Support | Application Level Support | Tag Representation | Key Compatibility Issues |
 |----------------|------------------------|---------------------------|-------------------|-----------------------|
-| **go-ethereum** | "earliest", "latest", "pending", "safe", "finalized" | Same as JSON level | Negative integers | Consistent behavior across all methods |
+| **go-ethereum** | "earliest", "latest", "pending", "safe", "finalized" | Same as JSON level | Negative integers with consistent internal mapping:<br>• EarliestBlockNumber = -5<br>• SafeBlockNumber = -4<br>• FinalizedBlockNumber = -3<br>• LatestBlockNumber = -2<br>• PendingBlockNumber = -1 | • Consistent behavior across all methods<br>• Unified implementation in rpc/types.go<br>• Same parsing logic for BlockNumber and BlockNumberOrHash |
+| **Erigon** | "earliest", "latest", "pending", "safe", "finalized", "latestExecuted", "null" | Same as JSON level | Different negative mapping than go-ethereum:<br>• LatestExecutedBlockNumber = -5<br>• FinalizedBlockNumber = -4<br>• SafeBlockNumber = -3<br>• PendingBlockNumber = -2<br>• LatestBlockNumber = -1<br>• EarliestBlockNumber = 0 (not negative) | • Consistent behavior across methods<br>• Different constant values than go-ethereum<br>• Additional supported tags |
 | **Lotus** | Only "earliest", "latest", "pending" | "latest", "pending", "safe", "finalized" (but rejects "earliest") | String values | • Split implementation causes inconsistent behavior<br>• "safe" = 30 epochs behind latest<br>• "finalized" = 900 epochs behind latest<br>• Some methods like eth_getBlockTransactionCountByNumber don't support any tags |
 
 ### Number and Hash Formats
@@ -271,31 +326,34 @@ This section details how block specifiers are handled in key API methods across 
 
 ### Block Number Unmarshaling
 
-| Feature | go-ethereum (BlockNumber) | Lotus (EthUint64) | Compatibility Issues |
-|---------|---------------------------|-------------------|----------------------|
-| **Numeric Format** | Hex only | Both hex and decimal | Decimal numbers accepted by Lotus but rejected by go-ethereum |
-| **0x Prefix** | Required for all numeric inputs | Optional for hex, not used for decimal | `"42"` works in Lotus (decimal) but fails in go-ethereum (missing 0x) |
-| **Leading Zeros** | Rejected (e.g., "0x01" fails) | Accepted | `"0x01"` works in Lotus but fails in go-ethereum |
-| **Raw JSON Numbers** | Not accepted | Accepted (e.g., `42` without quotes) | Raw numbers work in Lotus but fail in go-ethereum |
-| **Special Tags** | Handled directly in BlockNumber | Handled at higher level in EthBlockNumberOrHash | Tags must be handled correctly at the right level |
-| **Error Handling** | Specific error types for each validation issue | Less specific errors | Error messages and handling differ |
-| **Range Limits** | Rejects values > int64 max | uint64 range | Very large block numbers handled differently |
-| **Example that fails in go-ethereum** | `"42"` (decimal without 0x) | | go-ethereum error: "hex number without 0x prefix" |
-| **Example that fails in go-ethereum** | `"0x01"` (leading zero) | | go-ethereum error: "hex number with leading zero digits" |
-| **Example that fails in go-ethereum** | `42` (raw JSON number) | | go-ethereum expects string format |
+| Feature | go-ethereum (BlockNumber) | Erigon (BlockNumber) | Lotus (EthUint64) | Compatibility Issues |
+|---------|---------------------------|----------------------|-------------------|----------------------|
+| **Numeric Format** | Hex only | Both decimal and hex | Both hex and decimal | Decimal numbers accepted by Erigon/Lotus but rejected by go-ethereum |
+| **0x Prefix** | Required for all numeric inputs | Optional for hex | Optional for hex, not used for decimal | `"42"` works in Erigon/Lotus (decimal) but fails in go-ethereum (missing 0x) |
+| **Leading Zeros** | Rejected (e.g., "0x01" fails) | Accepted | Accepted | `"0x01"` works in Erigon/Lotus but fails in go-ethereum |
+| **Raw JSON Numbers** | Not accepted | Accepted | Accepted (e.g., `42` without quotes) | Raw numbers work in Erigon/Lotus but fail in go-ethereum |
+| **Special Tags** | Directly maps to negative int64 values | Directly maps to negative int64 (different values) | Handled at higher level in EthBlockNumberOrHash | Different internal representation between go-ethereum/Erigon vs Lotus |
+| **Error Handling** | Strict validation with specific error types:<br>- "hex number without 0x prefix"<br>- "hex number with leading zero digits"<br>- "block number larger than int64" | Less strict validation | Less specific errors | Error messages and handling differ |
+| **Range Limits** | Rejects values > int64 max | Likely similar to go-ethereum | uint64 range | Very large block numbers handled differently |
+| **Implementation** | String parsing in UnmarshalJSON with explicit tag recognition | Similar to go-ethereum but with additional tags | Different implementation with flexible format support | Implementation differences affect compatibility |
+| **Example that fails in go-ethereum** | `"42"` (decimal without 0x) | | | go-ethereum error: "hex number without 0x prefix" |
+| **Example that fails in go-ethereum** | `"0x01"` (leading zero) | | | go-ethereum error: "hex number with leading zero digits" |
+| **Example that fails in go-ethereum** | `42` (raw JSON number) | | | go-ethereum expects string format |
 
 ### Block Number or Hash Unmarshaling
 
-| Feature | go-ethereum (BlockNumberOrHash) | Lotus (EthBlockNumberOrHash) | Compatibility Issues |
-|---------|--------------------------------|------------------------------|----------------------|
-| **JSON Structure** | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | Both require exact field name matching (case-sensitive) |
-| **Special Tags** | Supports "earliest", "latest", "pending", "safe", "finalized" | Only "earliest", "latest", "pending" at unmarshal level | "safe" and "finalized" not recognized at JSON unmarshal level but are handled by application code |
-| **Internal Representation** | Special tags become negative integers | Special tags stored as string pointers | Different internal logic required |
-| **Block Hash Detection** | 66 chars AND must have "0x" prefix | 66 chars AND must have "0x" prefix | Both implementations require "0x" prefix for hashes |
-| **Tag Case Sensitivity** | Case sensitive (must be lowercase) | Case sensitive (must be lowercase) | Both reject "Latest" or "LATEST" |
-| **Example that fails in both** | `{"BlockNumber":"0x1"}` (capital B) | | Neither accepts capitalized field names |
-| **Example that fails in Lotus** | `"safe"` or `"finalized"` | | Not recognized at unmarshaling level in Lotus |
-| **Example that fails in both** | Hash without "0x" prefix | | Both implementations require "0x" prefix for hashes |
+| Feature | go-ethereum (BlockNumberOrHash) | Erigon (BlockNumberOrHash) | Lotus (EthBlockNumberOrHash) | Compatibility Issues |
+|---------|--------------------------------|----------------------------|------------------------------|----------------------|
+| **JSON Structure** | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | Similar to go-ethereum | ```{"blockNumber":"0x1"}``` or ```{"blockHash":"0x..."}``` | All implementations require exact field name matching (case-sensitive) |
+| **String Parameter** | Supports string tag/hash alternatives to structured JSON | Similar to go-ethereum | Supports string tag/hash alternatives to structured JSON | All implementations support a simple string instead of object |
+| **Special Tags** | Supports "earliest", "latest", "pending", "safe", "finalized" | Adds "latestExecuted", "null" to go-ethereum's tags | Only "earliest", "latest", "pending" at unmarshal level | "safe" and "finalized" not recognized at JSON unmarshal level in Lotus but are handled by application code |
+| **Internal Representation** | Special tags become negative integers | Special tags become negative integers with different values | Special tags stored as string pointers | Different internal logic required |
+| **Block Hash Detection** | 66 chars AND must have "0x" prefix | Similar to go-ethereum | 66 chars AND must have "0x" prefix | All implementations require "0x" prefix for hashes |
+| **Tag Case Sensitivity** | Case sensitive (must be lowercase) | Case sensitive (must be lowercase) | Case sensitive (must be lowercase) | All implementations reject "Latest" or "LATEST" |
+| **Implementation** | Detailed in rpc/types.go with structure:<br>- Tries structured JSON via Unmarshal first<br>- If input is string, checks for tags<br>- If 66 chars with 0x, parses as hash<br>- Otherwise tries to parse as blockNumber | Likely similar to go-ethereum | Similar structure with key differences:<br>- Only recognizes three special tags<br>- Different internal representation | Implementation details affect edge cases |
+| **Example that fails in all** | `{"BlockNumber":"0x1"}` (capital B) | | | All implementations reject capitalized field names |
+| **Example that fails in Lotus** | `"safe"` or `"finalized"` | | | Not recognized at unmarshaling level in Lotus |
+| **Example that fails in all** | Hash without "0x" prefix | | | All implementations require "0x" prefix for hashes |
 
 ### Block Tag Interpretation
 
