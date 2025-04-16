@@ -463,8 +463,25 @@ Lotus has mixed support for block tags:
 
 3. **Methods Without Block Tag Support**:
    - `eth_getBlockTransactionCountByNumber` - Uses `EthUint64`, only accepts numeric values
+   - **All Hash-Based Methods** - None of the hash-based methods (like `eth_getBlockByHash`, `eth_getBlockTransactionCountByHash`, `eth_getTransactionByBlockHashAndIndex`) support block tags in any implementation (go-ethereum, Erigon, or Lotus)
    
 Many Lotus methods use the `getTipsetByBlockNumber` helper function to handle block tags, which converts string tags to appropriate Filecoin tipsets. Note that "earliest" tag is explicitly not supported and returns an error in methods that use this helper.
+
+### Block Number vs. Block Hash Parameter Methods
+
+It's important to understand that in all three implementations:
+
+1. **Number-based methods** (`eth_getBlockByNumber`, etc.):
+   - Accept block tags like "latest", "pending", etc. (with varying levels of support)
+   - Parameters are processed through BlockNumber or similar types
+
+2. **Hash-based methods** (`eth_getBlockByHash`, etc.):
+   - **Do not accept block tags** in any implementation
+   - Only accept actual block hashes with 0x prefix
+   - Parameters are processed through Hash types (common.Hash, EthHash)
+   - No special tag handling exists in these methods
+
+This is a fundamental design choice in all Ethereum JSON-RPC implementations. To use block tags, clients must use the number-based methods rather than hash-based methods.
 
 ### Block Number or Hash Unmarshaling
 

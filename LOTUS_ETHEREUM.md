@@ -36,7 +36,10 @@ This document compares the Ethereum JSON-RPC API implementations across three co
 | **Number Format** | Hex-only, requires "0x" prefix, rejects leading zeros | Accepts both decimal and hex, tries decimal first | Accepts both decimal and hex, optional "0x" prefix for decimal |
 | **Hash Format** | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix | Fixed 32-byte array, requires "0x" prefix |
 | **Special Tags** | "earliest", "latest", "pending", "safe", "finalized" | All go-ethereum tags plus "latestExecuted", "null" | JSON unmarshaling only supports: "earliest", "latest", "pending"<br>Higher level code supports: "safe", "finalized" |
+| **Hash-Based Methods** | Do NOT support any block tags | Do NOT support any block tags | Do NOT support any block tags |
 | **Implementation** | Consistent across methods | Consistent across methods | Inconsistent - some methods don't support tags |
+
+**Important Note**: In all implementations (go-ethereum, Erigon, and Lotus), hash-based methods like `eth_getBlockByHash`, `eth_getBlockTransactionCountByHash`, and `eth_getTransactionByBlockHashAndIndex` do NOT support block tags like "latest" or "pending". They only accept actual block hashes. To use block tags, clients must use the corresponding number-based methods.
 
 ## JSON-RPC Method Comparison
 
@@ -169,10 +172,10 @@ This section maps common JSON-RPC methods to their parameter types and handling 
 | **eth_getBlockTransactionCountByNumber** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | `EthUint64`<br>**No tag support** - only accepts numbers |
 | **eth_getTransactionByBlockNumberAndIndex** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | `string`<br>Parsed by getTipsetByBlockNumber<br>Doesn't support "earliest" |
 | **eth_getUncleCountByBlockNumber** | Block Number | `BlockNumber`<br>Supports all tags | `BlockNumber`<br>Supports all tags | Not implemented |
-| **eth_getBlockByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix |
-| **eth_getBlockTransactionCountByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
-| **eth_getTransactionByBlockHashAndIndex** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
-| **eth_getUncleCountByBlockHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix | `common.Hash`<br>Requires "0x" prefix | Not implemented |
+| **eth_getBlockByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
+| **eth_getBlockTransactionCountByHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
+| **eth_getTransactionByBlockHashAndIndex** | Block Hash | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `EthHash`<br>Requires "0x" prefix<br>**No tag support** |
+| **eth_getUncleCountByBlockHash** | Block Hash | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | `common.Hash`<br>Requires "0x" prefix<br>**No tag support** | Not implemented |
 
 ### Block Number or Hash Parameter Methods
 
